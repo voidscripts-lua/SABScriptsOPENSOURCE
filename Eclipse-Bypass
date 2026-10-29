@@ -1,0 +1,429 @@
+-- ============================================================
+-- ECLIPSE BYPASS — Bağımsız Loader
+-- Kullanım: Executor'a yapıştır, çalıştır. Panel açılır.
+-- ============================================================
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+local NetworkClient = game:GetService("NetworkClient")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+local isMobile = UserInputService.TouchEnabled and not UserInputService.MouseEnabled
+
+local old = playerGui:FindFirstChild("CrystalBypassGUI")
+if old then old:Destroy() end
+
+-- Ayarlar
+local BypassConfig = {
+    Power = 97000,
+    PCPower = 97000,
+    MobilePower = 72000,
+    Mode = "PC",
+    SpamDelay = 0.12,
+    Version = "V1",
+}
+local bypassRunning, bypassBomb, bypassThread = false, nil, nil
+
+local function buildBombV1(power)
+    local depth, main, spam = 186, {}, {{}}
+    local z = spam[1]
+    for _ = 1, depth do local t = {}; table.insert(z, t); z = t end
+    local maxRep = math.floor(power / (depth + 2))
+    for _ = 1, maxRep do table.insert(main, spam) end
+    return main
+end
+
+local function buildBombV2(power)
+    local depth, main, spam = 296, {}, {{}}
+    local z = spam[1]
+    for _ = 1, depth do local t = {}; table.insert(z, t); z = t end
+    local maxRep = math.floor(power / (depth + 2))
+    for _ = 1, maxRep do table.insert(main, spam) end
+    return main
+end
+
+local function buildBomb(power)
+    return BypassConfig.Version == "V1" and buildBombV1(power) or buildBombV2(power)
+end
+
+local function startBypass()
+    if bypassRunning then return true end
+    bypassRunning = true
+    pcall(function() NetworkClient:SetOutgoingKBPSLimit(math.huge) end)
+    bypassBomb = buildBomb(BypassConfig.Power)
+    local rrs = game:FindFirstChild("RobloxReplicatedStorage")
+    local remote = rrs and rrs:FindFirstChild("SetPlayerBlockList")
+    if not remote then bypassRunning = false; return false end
+    bypassThread = task.spawn(function()
+        while bypassRunning do
+            if bypassBomb then pcall(function() remote:FireServer(bypassBomb) end) end
+            task.wait(BypassConfig.SpamDelay)
+        end
+    end)
+    return true
+end
+
+local function stopBypass()
+    bypassRunning = false
+    if bypassThread then pcall(task.cancel, bypassThread); bypassThread = nil end
+    bypassBomb = nil
+    pcall(function() NetworkClient:SetOutgoingKBPSLimit(math.huge) end)
+end
+
+local function updateBypassPower(p)
+    local max = BypassConfig.Mode == "PC" and 150000 or 100000
+    BypassConfig.Power = math.clamp(p, 10000, max)
+    if BypassConfig.Mode == "PC" then BypassConfig.PCPower = BypassConfig.Power
+    else BypassConfig.MobilePower = BypassConfig.Power end
+    if bypassRunning then stopBypass(); task.wait(0.05); startBypass() end
+end
+
+-- Arka plan
+local BYPASS_BACKGROUND_FALLBACK = "rbxassetid://94763047376005"
+local function resolveBackground()
+    local loader = nil
+    pcall(function()
+        loader = (typeof(getcustomasset) == "function" and getcustomasset)
+            or (typeof(getsynasset) == "function" and getsynasset)
+    end)
+    if not loader or typeof(writefile) ~= "function" or typeof(isfile) ~= "function" then
+        return BYPASS_BACKGROUND_FALLBACK
+    end
+    local file = "CrystalBypass_bg.png"
+    local url = "https://files.catbox.moe/5slzyj.png"
+    local has = false
+    pcall(function() has = isfile(file) end)
+    if not has then
+        local ok, data = pcall(function() return game:HttpGet(url) end)
+        if not ok or type(data) ~= "string" or data:sub(1,8) ~= "\137PNG\r\n\26\n" then
+            return BYPASS_BACKGROUND_FALLBACK
+        end
+        if not pcall(writefile, file, data) then return BYPASS_BACKGROUND_FALLBACK end
+    end
+    local ok, asset = pcall(loader, file)
+    if ok and type(asset) == "string" and asset ~= "" then return asset end
+    return BYPASS_BACKGROUND_FALLBACK
+end
+
+-- GUI
+local W, H = 320, 160
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "CrystalBypassGUI"
+screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = true
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent = playerGui
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.fromOffset(W, H)
+mainFrame.Position = UDim2.new(0.5, -W/2, 0.5, -H/2)
+mainFrame.BackgroundColor3 = Color3.fromRGB(8, 8, 8)
+mainFrame.BorderSizePixel = 0
+mainFrame.ClipsDescendants = true
+mainFrame.Active = true
+mainFrame.Visible = true
+mainFrame.Parent = screenGui
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 16)
+Instance.new("UIAspectRatioConstraint", mainFrame).AspectRatio = W / H
+
+if isMobile then
+    local scale = Instance.new("UIScale", mainFrame)
+    scale.Scale = 0.82
+end
+
+local bg = Instance.new("ImageLabel")
+bg.Size = UDim2.new(1, 0, 1, 0)
+bg.BackgroundTransparency = 1
+bg.Image = resolveBackground()
+bg.ScaleType = Enum.ScaleType.Crop
+bg.ZIndex = 0
+bg.Parent = mainFrame
+Instance.new("UICorner", bg).CornerRadius = UDim.new(0, 16)
+
+local content = Instance.new("Frame")
+content.Size = UDim2.new(1, 0, 1, 0)
+content.BackgroundTransparency = 1
+content.ZIndex = 3
+content.Parent = mainFrame
+
+-- Başlık
+local title = Instance.new("TextLabel")
+title.Size = UDim2.fromOffset(220, 26)
+title.Position = UDim2.new(0.5, -110, 0, 44)
+title.BackgroundTransparency = 1
+title.Text = "ECLIPSE BYPASS"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.TextSize = 16
+title.Font = Enum.Font.GothamBlack
+title.TextXAlignment = Enum.TextXAlignment.Center
+title.ZIndex = 3
+title.Parent = content
+
+-- Kapat
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.fromOffset(28, 28)
+closeBtn.Position = UDim2.new(1, -36, 0, 8)
+closeBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+closeBtn.BorderSizePixel = 0
+closeBtn.Text = "X"
+closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeBtn.TextSize = 14
+closeBtn.Font = Enum.Font.GothamBlack
+closeBtn.ZIndex = 12
+closeBtn.Parent = mainFrame
+Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 7)
+
+-- Sürüm butonu
+local versionBtn = Instance.new("TextButton")
+versionBtn.Size = UDim2.fromOffset(44, 22)
+versionBtn.Position = UDim2.fromOffset(16, 13)
+versionBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+versionBtn.BorderSizePixel = 0
+versionBtn.Text = "V1"
+versionBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+versionBtn.TextSize = 10
+versionBtn.Font = Enum.Font.GothamBold
+versionBtn.ZIndex = 4
+versionBtn.Parent = content
+Instance.new("UICorner", versionBtn).CornerRadius = UDim.new(0, 6)
+
+-- PC/Mobile seçici
+local modeFrame = Instance.new("Frame")
+modeFrame.Size = UDim2.new(0, 100, 0, 22)
+modeFrame.Position = UDim2.new(0.5, -50, 0, 13)
+modeFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+modeFrame.BorderSizePixel = 0
+modeFrame.Parent = content
+Instance.new("UICorner", modeFrame).CornerRadius = UDim.new(0, 6)
+
+local pcBtn = Instance.new("TextButton")
+pcBtn.Size = UDim2.new(0.5, -2, 1, -4)
+pcBtn.Position = UDim2.fromOffset(2, 2)
+pcBtn.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+pcBtn.BorderSizePixel = 0
+pcBtn.Text = "PC"
+pcBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+pcBtn.TextSize = 9
+pcBtn.Font = Enum.Font.GothamBold
+pcBtn.Parent = modeFrame
+Instance.new("UICorner", pcBtn).CornerRadius = UDim.new(0, 5)
+
+local mbBtn = Instance.new("TextButton")
+mbBtn.Size = UDim2.new(0.5, -2, 1, -4)
+mbBtn.Position = UDim2.new(0.5, 2, 0, 2)
+mbBtn.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+mbBtn.BorderSizePixel = 0
+mbBtn.Text = "Mobile"
+mbBtn.TextColor3 = Color3.fromRGB(80, 80, 80)
+mbBtn.TextSize = 9
+mbBtn.Font = Enum.Font.GothamBold
+mbBtn.Parent = modeFrame
+Instance.new("UICorner", mbBtn).CornerRadius = UDim.new(0, 5)
+
+-- Power satırı
+local powerRow = Instance.new("Frame")
+powerRow.Size = UDim2.new(1, -44, 0, 40)
+powerRow.Position = UDim2.fromOffset(22, 74)
+powerRow.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+powerRow.BorderSizePixel = 0
+powerRow.Parent = content
+Instance.new("UICorner", powerRow).CornerRadius = UDim.new(0, 10)
+
+local powerLbl = Instance.new("TextLabel")
+powerLbl.Size = UDim2.fromOffset(38, 40)
+powerLbl.Position = UDim2.fromOffset(8, 0)
+powerLbl.BackgroundTransparency = 1
+powerLbl.Text = "POWER"
+powerLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+powerLbl.TextSize = 8
+powerLbl.Font = Enum.Font.GothamBold
+powerLbl.TextXAlignment = Enum.TextXAlignment.Left
+powerLbl.Parent = powerRow
+
+local powerBox = Instance.new("TextBox")
+powerBox.Size = UDim2.fromOffset(60, 24)
+powerBox.Position = UDim2.fromOffset(46, 8)
+powerBox.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+powerBox.BorderSizePixel = 0
+powerBox.Text = "97000"
+powerBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+powerBox.TextSize = 10
+powerBox.Font = Enum.Font.GothamBold
+powerBox.ClearTextOnFocus = false
+powerBox.Parent = powerRow
+Instance.new("UICorner", powerBox).CornerRadius = UDim.new(0, 6)
+
+powerBox.FocusLost:Connect(function()
+    local v = tonumber(powerBox.Text)
+    if v then updateBypassPower(v); powerBox.Text = tostring(BypassConfig.Power)
+    else powerBox.Text = tostring(BypassConfig.Power) end
+end)
+
+-- Aktivasyon butonu
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Size = UDim2.new(1, -150, 0, 32)
+toggleBtn.Position = UDim2.fromOffset(112, 4)
+toggleBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+toggleBtn.BorderSizePixel = 0
+toggleBtn.Text = "ACTIVATE BYPASS"
+toggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleBtn.TextSize = 9
+toggleBtn.Font = Enum.Font.GothamBold
+toggleBtn.Parent = powerRow
+Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0, 8)
+
+-- Auto-on-steal
+local autoRow = Instance.new("Frame")
+autoRow.Size = UDim2.new(1, -44, 0, 24)
+autoRow.Position = UDim2.fromOffset(22, 118)
+autoRow.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+autoRow.BorderSizePixel = 0
+autoRow.Parent = content
+Instance.new("UICorner", autoRow).CornerRadius = UDim.new(0, 8)
+
+local autoLabel = Instance.new("TextLabel")
+autoLabel.Size = UDim2.new(0.5, 0, 1, 0)
+autoLabel.Position = UDim2.fromOffset(10, 0)
+autoLabel.BackgroundTransparency = 1
+autoLabel.Text = "Auto On Steal"
+autoLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+autoLabel.TextSize = 9
+autoLabel.Font = Enum.Font.GothamBold
+autoLabel.TextXAlignment = Enum.TextXAlignment.Left
+autoLabel.Parent = autoRow
+
+local autoPill = Instance.new("TextButton")
+autoPill.Size = UDim2.fromOffset(28, 14)
+autoPill.Position = UDim2.new(1, -38, 0.5, -7)
+autoPill.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+autoPill.BorderSizePixel = 0
+autoPill.Text = ""
+autoPill.Parent = autoRow
+Instance.new("UICorner", autoPill).CornerRadius = UDim.new(1, 0)
+
+local autoKnob = Instance.new("Frame")
+autoKnob.Size = UDim2.fromOffset(10, 10)
+autoKnob.Position = UDim2.new(0, 2, 0.5, -5)
+autoKnob.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+autoKnob.BorderSizePixel = 0
+autoKnob.Parent = autoPill
+Instance.new("UICorner", autoKnob).CornerRadius = UDim.new(1, 0)
+
+-- Durum yönetimi
+local autoState = false
+local manualOverride = false
+
+local function updateToggleVisual()
+    toggleBtn.Text = bypassRunning and "DEACTIVATE BYPASS" or "ACTIVATE BYPASS"
+    toggleBtn.BackgroundColor3 = bypassRunning and Color3.fromRGB(65, 65, 65) or Color3.fromRGB(35, 35, 35)
+end
+
+local function updateAutoVisual()
+    autoPill.BackgroundColor3 = autoState and Color3.fromRGB(205, 205, 205) or Color3.fromRGB(20, 20, 20)
+    autoKnob.Position = autoState and UDim2.new(0, 16, 0.5, -5) or UDim2.new(0, 2, 0.5, -5)
+end
+
+local function setBypass(on)
+    on = on == true
+    if bypassRunning == on then return end
+    if on then
+        if not startBypass() then return end
+    else
+        stopBypass()
+    end
+    updateToggleVisual()
+end
+
+toggleBtn.Activated:Connect(function()
+    manualOverride = true
+    setBypass(not bypassRunning)
+end)
+
+autoPill.Activated:Connect(function()
+    autoState = not autoState
+    updateAutoVisual()
+end)
+
+-- Auto on steal
+player:GetAttributeChangedSignal("Stealing"):Connect(function()
+    if autoState and not manualOverride then
+        local stealing = player:GetAttribute("Stealing") == true
+        if stealing ~= bypassRunning then setBypass(stealing) end
+    end
+    if player:GetAttribute("Stealing") then manualOverride = false end
+end)
+
+-- V1/V2
+versionBtn.Activated:Connect(function()
+    BypassConfig.Version = BypassConfig.Version == "V1" and "V2" or "V1"
+    versionBtn.Text = BypassConfig.Version
+    if bypassRunning then stopBypass(); task.wait(0.05); startBypass() end
+end)
+
+-- PC/Mobile
+pcBtn.Activated:Connect(function()
+    BypassConfig.Mode = "PC"
+    BypassConfig.Power = BypassConfig.PCPower
+    powerBox.Text = tostring(BypassConfig.Power)
+    pcBtn.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+    pcBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    mbBtn.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+    mbBtn.TextColor3 = Color3.fromRGB(80, 80, 80)
+end)
+mbBtn.Activated:Connect(function()
+    BypassConfig.Mode = "Mobile"
+    BypassConfig.Power = BypassConfig.MobilePower
+    powerBox.Text = tostring(BypassConfig.Power)
+    pcBtn.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+    pcBtn.TextColor3 = Color3.fromRGB(80, 80, 80)
+    mbBtn.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+    mbBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+end)
+
+-- Kapat
+closeBtn.Activated:Connect(function() screenGui.Enabled = false end)
+
+-- Sürükle
+local dragging = false
+local dragInput, dragStart, startPos
+mainFrame.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+        dragging = true; dragInput = i; dragStart = i.Position; startPos = mainFrame.Position
+    end
+end)
+mainFrame.InputChanged:Connect(function(i)
+    if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+        dragInput = i
+    end
+end)
+UserInputService.InputChanged:Connect(function(i)
+    if dragging and i == dragInput then
+        local d = i.Position - dragStart
+        mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+    end
+end)
+UserInputService.InputEnded:Connect(function(i)
+    if dragging and (i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch) then dragging = false end
+end)
+
+-- Global API
+_G.CrystalBypass = {
+    IsEnabled = function() return bypassRunning end,
+    SetBypass = function(v) manualOverride = true; setBypass(v) end,
+    SetVisible = function(v) screenGui.Enabled = v end,
+    Stop = function() stopBypass() end,
+    ResetPosition = function() mainFrame.Position = UDim2.new(0.5, -W/2, 0.5, -H/2) end,
+    GetPower = function() return BypassConfig.Power end,
+    SetPower = function(v) updateBypassPower(v); powerBox.Text = tostring(BypassConfig.Power) end,
+    GetVersion = function() return BypassConfig.Version end,
+    SetAutoOnSteal = function(v) autoState = v == true; updateAutoVisual() end,
+}
+
+updateToggleVisual()
+updateAutoVisual()
+
+print("[Eclipse Bypass] Yüklendi. Panel açık.")
